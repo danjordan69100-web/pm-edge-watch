@@ -1,0 +1,52 @@
+name: pm-edge-watch
+
+on:
+  schedule:
+    - cron: '7 */4 * * *'    # snapshot marches + ensemble GFS, toutes les 4h
+    - cron: '40 3 * * *'     # balayage des resolutions, 1x/jour
+  workflow_dispatch:
+
+# Un seul run a la fois : deux jobs qui poussent en meme temps = conflit git.
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Collecte
+        run: |
+          if [ "${{ github.event.schedule }}" = "40 3 * * *" ]; then
+            python collect_once.py --resolve
+          else
+            python collect_once.py
+          fi
+
+      - name: Commit
+        run: |
+          git config user.name  "pm-edge-watch"
+          git config user.email "actions@github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "rien de neuf"
+            exit 0
+          fi
+          git commit -m "collect $(date -u +%Y-%m-%dT%H:%MZ)"
+          # Le repo peut avoir bouge entre le checkout et le push : on rejoue par-dessus.
+          for i in 1 2 3; do
+            git pull --rebase --autostash origin main && git push origin main && exit 0
+            echo "retry $i"
+            sleep $((i * 5))
+          done
+          exit 1
