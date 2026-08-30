@@ -81,3 +81,25 @@ Verifie apres patch : **2 676 marches meteo captes**, **10/10 villes appariees**
 prix <-> prevision, spread median 0,020 et **53 % sous 0,02** (zone tradable).
 Interet decisif : ils resolvent **en 1 jour** => une observation quasi independante par
 ville et par jour, exactement ce qui manque au dossier (2 381 resolus = ~44 semaines seulement).
+
+### 4. Groupe TEMOIN ajoute le 31/08 (decision Dan)
+Le dossier a produit **six faux signaux en une soiree** (10/08) faute de pouvoir distinguer
+un edge d'un artefact de methode. On collecte donc desormais un marche ou l'edge est
+**structurellement impossible** : les series de prix crypto a granularite **1H**
+(« Bitcoin Up or Down - August 30, 7PM ET »). La source externe y est le prix spot, publique
+a la microseconde et deja arbitree par des bots pro.
+
+**=> Si l'analyse de janvier trouve un edge ICI, c'est la METHODE qui est cassee, pas le marche.**
+
+Deux recensements ont ete necessaires pour y arriver :
+- Il n'existe **aucun** marche de prix crypto NON recurrent a echeance 1-150 j (verifie sur
+  `crypto-prices`, `bitcoin`, `ethereum` -> 0). Le temoin ne pouvait etre qu'une serie intraday.
+- Le filtre par duree de vie **ne marchait pas** : 125 tranches passaient quand meme, leur
+  `startDate` etant celui de la serie et non de la tranche. Le discriminant fiable est le
+  **tag de granularite** (`5M` 371 · `1H` 128 · `15M` 124 marches ouverts).
+
+Retenu : **1H**. ~24 observations/jour/actif pour calibrer, et **+1 % de lignes par snapshot**
+seulement (197 Ko, inchange). 5M et 15M ecartes : 288 marches/jour/actif pour la meme information.
+Mesure apres patch : **205 marches temoin, spread median 0,010, 97 % sous 2c**.
+
+⚠️ Ne PAS traiter le temoin comme une piste. Il ne sert qu'a calibrer le detecteur.

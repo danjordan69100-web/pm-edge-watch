@@ -23,7 +23,8 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 GAMMA = "https://gamma-api.polymarket.com"
 ENSEMBLE = "https://ensemble-api.open-meteo.com/v1/ensemble"
 
-TAGS = ["politics", "geopolitics", "elections", "world", "weather", "temperature", "climate"]
+TAGS = ["politics", "geopolitics", "elections", "world", "weather", "temperature", "climate",
+        "crypto-prices"]  # TEMOIN, pas une piste -- voir WITNESS_TAGS plus bas
 MIN_LIQUIDITY = 500.0        # ecarte la longue traine morte (marches 2028 sans carnet)
 MAX_HORIZON_DAYS = 150       # au-dela, le marche ne resoudra pas dans la fenetre d'etude
 
@@ -39,6 +40,33 @@ MAX_HORIZON_DAYS = 150       # au-dela, le marche ne resoudra pas dans la fenetr
 # sont deja collectes) -- c'est elle qui avait tue le tennis malgre un edge reel.
 WEATHER_TAGS = {"weather", "temperature", "climate"}
 MIN_LIQUIDITY_WEATHER = 20.0
+
+# --- AJOUT 31/08/2026 : GROUPE TEMOIN (decision Dan) ---------------------------
+# Le dossier a produit SIX faux signaux en une soiree (10/08) faute de pouvoir
+# distinguer un edge d'un artefact de methode. On ajoute donc un marche ou l'edge
+# est structurellement IMPOSSIBLE : le crypto. La "source externe" y est le prix
+# spot -- la meme information que celle du marche, publique a la microseconde et
+# deja arbitree par des bots pro. Mesure du 30/08 : spread median 0,010, 92 % des
+# marches sous 2c, liquidite mediane 11 859 $ (le meilleur profil du site).
+#   => Si l'analyse de janvier trouve un edge ICI, c'est la METHODE qui est cassee.
+# C'est le "tester le filtre contre des cas connus" qui a manque a tout le dossier.
+#
+# On EXCLUT les tranches de 5 minutes ("Bitcoin Up or Down - 7:30PM-7:35PM ET") :
+# 288 marches/jour/actif feraient ~37 000 lignes de referentiel d'ici janvier pour
+# aucune valeur. Le filtre porte sur la DUREE DE VIE du marche, pas sur le temps
+# restant : filtrer sur le temps restant amputerait chaque marche de ses derniers
+# snapshots, justement ceux ou le prix converge.
+WITNESS_TAGS = {"crypto-prices"}
+# Recensement du 31/08 : il n'existe AUCUN marche de prix crypto non recurrent a
+# echeance 1-150 j (verifie sur crypto-prices, bitcoin, ethereum -> 0). Tous les
+# marches de prix sont des series intraday. Le temoin ne peut donc etre qu'une de
+# ces series -- et c'est tres bien : le spot y est l'information, publique a la
+# microseconde, donc l'edge y est structurellement impossible. C'est le but.
+# Granularites ouvertes mesurees : 5M=371, 1H=128, 15M=124.
+# On retient 1H : assez d'observations independantes pour calibrer (~24/j/actif),
+# assez peu pour ne rien couter (+1 % de lignes par snapshot).
+# 5M et 15M sont ecartes : 288 marches/jour/actif pour la meme information.
+WITNESS_GRANULARITY = "1H"
 
 # Villes US utilisees par les marches meteo Polymarket (lat, lon, tz)
 CITIES = {
@@ -128,6 +156,8 @@ def collect_markets(closed=False):
                             continue
                     except ValueError:
                         pass
+                    if tag in WITNESS_TAGS and WITNESS_GRANULARITY not in ev_tags.split(","):
+                        continue
 
                 seen.add(cid)
                 bid, ask = fnum(m.get("bestBid")), fnum(m.get("bestAsk"))
