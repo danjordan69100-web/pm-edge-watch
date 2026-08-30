@@ -32,7 +32,7 @@ git pull --rebase
 git commit -am "keepalive" && git push
 ```
 
-**Dernier commit manuel : 2026-08-10** → prochain avant le **2026-09-29**.
+**Dernier commit manuel : 2026-08-31** → prochain avant le **2026-10-20**.
 
 ## Vérifier que la collecte tourne toujours
 
