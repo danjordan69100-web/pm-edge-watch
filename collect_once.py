@@ -23,9 +23,22 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 GAMMA = "https://gamma-api.polymarket.com"
 ENSEMBLE = "https://ensemble-api.open-meteo.com/v1/ensemble"
 
-TAGS = ["politics", "geopolitics", "elections", "world"]
+TAGS = ["politics", "geopolitics", "elections", "world", "weather", "temperature", "climate"]
 MIN_LIQUIDITY = 500.0        # ecarte la longue traine morte (marches 2028 sans carnet)
 MAX_HORIZON_DAYS = 150       # au-dela, le marche ne resoudra pas dans la fenetre d'etude
+
+# --- CORRECTIF 31/08/2026 : la PISTE 2 etait INTESTABLE ------------------------
+# On collectait la dispersion d'ensemble GFS de 10 villes US depuis le 02/08 SANS
+# jamais collecter le moindre marche meteo en face : le tag "weather" n'etait pas
+# dans TAGS. 665 marches "Will it rain in <ville> on <date>?" existent, ouverts,
+# avec carnet, sur exactement ces villes. Recensement du 31/08 : 0 capte.
+# Ils resolvent en 1 JOUR -> 1 observation quasi INDEPENDANTE par ville et par jour,
+# ce qui est precisement ce qui manque au dossier (2 381 resolus = ~44 semaines).
+# Leur liquidite mesuree va de 1 a 600 $ : le seuil de 500 $ en tuerait ~90 %.
+# On leur applique donc un seuil dedie. La friction reste mesurable (bid/ask/spread
+# sont deja collectes) -- c'est elle qui avait tue le tennis malgre un edge reel.
+WEATHER_TAGS = {"weather", "temperature", "climate"}
+MIN_LIQUIDITY_WEATHER = 20.0
 
 # Villes US utilisees par les marches meteo Polymarket (lat, lon, tz)
 CITIES = {
@@ -94,6 +107,7 @@ def collect_markets(closed=False):
 
     for tag in TAGS:
         events = fetch_events(tag, closed=closed)
+        min_liq = MIN_LIQUIDITY_WEATHER if tag in WEATHER_TAGS else MIN_LIQUIDITY
         print(f"  tag={tag:<12} events={len(events)}")
         for ev in events:
             ev_tags = ",".join(sorted({t.get("slug", "") for t in (ev.get("tags") or [])}))
@@ -106,7 +120,7 @@ def collect_markets(closed=False):
                     if not m.get("enableOrderBook"):
                         continue
                     liq = fnum(m.get("liquidityNum"), 0.0) or 0.0
-                    if liq < MIN_LIQUIDITY:
+                    if liq < min_liq:
                         continue
                     ed = m.get("endDate") or ""
                     try:
