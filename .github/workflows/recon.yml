@@ -38,6 +38,8 @@ jobs:
             # Simulation du patch de collecte : execute tout, n'ecrit rien.
             # Le garde-fou de l'etape suivante verifie qu'aucun fichier n'a bouge.
             dry-run) python collect_once.py --dry-run ;;
+            # Chemin de code EXACT emprunte par les runs planifies, en simulation.
+            gap-guard) python collect_once.py --gap-guard --dry-run ;;
             *) echo "::error::script refuse : $S"; exit 1 ;;
           esac
 
