@@ -352,57 +352,105 @@ def collect_depth(rows):
     return demandes, apparies
 
 
+def _stats_ensemble(d, city, label, unite, now, rows):
+    """Extrait les stats d'ensemble d'UNE reponse Open-Meteo. Logique inchangee
+    depuis le 02/08 : ne pas la toucher, 43 jours de serie en dependent."""
+    daily = d.get("daily") or {}
+    days = daily.get("time") or []
+    for var in ("temperature_2m_max", "temperature_2m_min"):
+        members = [k for k in daily if k.startswith(var)]
+        if not members:
+            continue
+        for i, day in enumerate(days):
+            vals = []
+            for k in members:
+                seq = daily.get(k) or []
+                if i < len(seq) and seq[i] is not None:
+                    vals.append(float(seq[i]))
+            if len(vals) < 5:
+                continue
+            rows.append({
+                "ts": now.isoformat(),
+                "city": city,
+                "city_label": label or "",   # cle de jointure avec les marches
+                "unit": unite,               # F ou C — varie d'une ligne a l'autre
+                "variable": var,
+                "target_day": day,
+                "lead_days": i,
+                "n_members": len(vals),
+                "mean": round(statistics.fmean(vals), 3),
+                "sd": round(statistics.pstdev(vals), 4),   # <- le signal
+                "min": round(min(vals), 2),
+                "max": round(max(vals), 2),
+                "p10": round(sorted(vals)[max(0, int(0.10 * len(vals)) - 1)], 2),
+                "p90": round(sorted(vals)[min(len(vals) - 1, int(0.90 * len(vals)))], 2),
+            })
+
+
 def collect_forecasts():
     """Dispersion d'ensemble GFS par ville — le signal 'info externe' jamais teste.
 
-    PATCH 13/09/2026 : chaque ville est desormais interrogee dans l'unite de SON
-    marche (F pour les villes US, C pour les autres). Les lignes du fichier ne
-    partagent donc plus la meme unite -> la colonne `unit` devient obligatoire.
-    Sans elle, comparer une prevision a un prix serait une jointure entre deux
-    echelles differentes -- l'erreur type du dossier (19 vs 22 momme, UTC vs Paris).
+    PATCH 13/09/2026, deux changements :
+
+    1. UNITE PAR VILLE. Chaque ville est interrogee dans l'unite de SON marche
+       (F pour les villes US, C pour les autres). Les lignes ne partagent donc
+       plus la meme echelle -> la colonne `unit` est obligatoire. Sans elle,
+       comparer une prevision a un prix serait une jointure entre deux echelles
+       differentes : l'erreur type du dossier (19 vs 22 momme, UTC vs Paris).
+
+    2. APPELS GROUPES. Mesure du 13/09 sur le runner : 53 villes une par une =
+       389 s, soit 79 % du temps de tout le snapshot (491 s au total). Open-Meteo
+       accepte les coordonnees multiples : 2 appels (un par unite) = 0,7 s mesure.
+       Le throttling venait du nombre d'appels depuis une IP GitHub partagee, pas
+       du volume de donnees.
+       L'ordre des reponses suit celui des coordonnees -- VERIFIE sur les 53
+       villes (13/13 et 40/40 apparies par lat/lon), et `timezone=auto` renvoie
+       exactement les fuseaux de la table (0 ecart). On verifie quand meme la
+       COMPLETUDE a chaque run : une reponse tronquee decalerait toutes les
+       villes suivantes d'un cran, et rien ne le signalerait.
     """
     now = datetime.now(timezone.utc)
     rows = []
-    for city, (lat, lon, tz, unite, label) in CITIES.items():
-        u = "fahrenheit" if unite == "F" else "celsius"
+    for unite, nom in (("F", "fahrenheit"), ("C", "celsius")):
+        items = [(k, v) for k, v in CITIES.items() if v[3] == unite]
+        if not items:
+            continue
+        lat = ",".join(str(v[0]) for _, v in items)
+        lon = ",".join(str(v[1]) for _, v in items)
         url = (f"{ENSEMBLE}?latitude={lat}&longitude={lon}&models=gfs025"
                f"&daily=temperature_2m_max,temperature_2m_min&forecast_days=7"
-               f"&temperature_unit={u}&timezone={urllib.parse.quote(tz)}")
-        d = get_json(url)
-        if not d or "daily" not in d:
+               f"&temperature_unit={nom}&timezone=auto")
+        d = get_json(url, timeout=120)
+        reps = d if isinstance(d, list) else ([d] if d else [])
+
+        if len(reps) != len(items):
+            # Jamais deviner quelle reponse va avec quelle ville : on retombe sur
+            # les appels unitaires, plus lents mais sans ambiguite possible.
+            print(f"  ! lot {unite} : {len(reps)} reponses pour {len(items)} villes"
+                  f" -> repli sur les appels un par un", file=sys.stderr)
+            for city, v in items:
+                u1 = (f"{ENSEMBLE}?latitude={v[0]}&longitude={v[1]}&models=gfs025"
+                      f"&daily=temperature_2m_max,temperature_2m_min&forecast_days=7"
+                      f"&temperature_unit={nom}&timezone={urllib.parse.quote(v[2])}")
+                d1 = get_json(u1)
+                if d1 and "daily" in d1:
+                    _stats_ensemble(d1, city, v[4], unite, now, rows)
+                time.sleep(0.6)
             continue
-        daily = d["daily"]
-        days = daily.get("time") or []
-        for var in ("temperature_2m_max", "temperature_2m_min"):
-            members = [k for k in daily if k.startswith(var)]
-            if not members:
+
+        ecarts = 0
+        for i, (city, v) in enumerate(items):
+            e = reps[i]
+            # Controle de position : la reponse i doit bien etre la ville i.
+            if (abs(fnum(e.get("latitude"), 999) - v[0]) > 0.35
+                    or abs(fnum(e.get("longitude"), 999) - v[1]) > 0.35):
+                ecarts += 1
                 continue
-            for i, day in enumerate(days):
-                vals = []
-                for k in members:
-                    seq = daily.get(k) or []
-                    if i < len(seq) and seq[i] is not None:
-                        vals.append(float(seq[i]))
-                if len(vals) < 5:
-                    continue
-                mean = statistics.fmean(vals)
-                rows.append({
-                    "ts": now.isoformat(),
-                    "city": city,
-                    "city_label": label or "",   # cle de jointure avec les marches
-                    "unit": unite,               # F ou C — varie d'une ligne a l'autre
-                    "variable": var,
-                    "target_day": day,
-                    "lead_days": i,
-                    "n_members": len(vals),
-                    "mean": round(mean, 3),
-                    "sd": round(statistics.pstdev(vals), 4),   # <- le signal
-                    "min": round(min(vals), 2),
-                    "max": round(max(vals), 2),
-                    "p10": round(sorted(vals)[max(0, int(0.10 * len(vals)) - 1)], 2),
-                    "p90": round(sorted(vals)[min(len(vals) - 1, int(0.90 * len(vals)))], 2),
-                })
-        time.sleep(0.6)   # courtoisie envers une API gratuite
+            _stats_ensemble(e, city, v[4], unite, now, rows)
+        if ecarts:
+            print(f"  ! lot {unite} : {ecarts} villes mal positionnees, ignorees",
+                  file=sys.stderr)
+        print(f"  previsions {unite} : {len(items) - ecarts}/{len(items)} villes")
     return rows
 
 
