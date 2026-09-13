@@ -21,6 +21,7 @@ import urllib.request, urllib.parse, urllib.error
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 GAMMA = "https://gamma-api.polymarket.com"
+CLOB = "https://clob.polymarket.com"
 ENSEMBLE = "https://ensemble-api.open-meteo.com/v1/ensemble"
 
 TAGS = ["politics", "geopolitics", "elections", "world", "weather", "temperature", "climate",
@@ -68,18 +69,83 @@ WITNESS_TAGS = {"crypto-prices"}
 # 5M et 15M sont ecartes : 288 marches/jour/actif pour la meme information.
 WITNESS_GRANULARITY = "1H"
 
-# Villes US utilisees par les marches meteo Polymarket (lat, lon, tz)
+# --- PATCH 13/09/2026 : mode simulation ---------------------------------------
+# `--dry-run` execute TOUT (appels reseau, appariement des carnets, previsions)
+# mais n'ecrit aucun fichier. Sert a valider un patch sur un runner sans risquer
+# d'abimer une collecte irremplacable : l'API ne permet pas de rejouer le passe
+# (verifie le 31/08 : /trades plafonne a 50 000, prices-history ~1 mois glissant).
+DRY_RUN = False
+
+# --- PATCH 13/09/2026 : les villes -------------------------------------------
+# On collectait la dispersion GFS de 10 villes US alors que les marches meteo
+# Polymarket portent sur 51 villes (recensement du referentiel, 33 456 marches).
+# Boston et Phoenix n'ont AUCUN marche en face : on les garde quand meme, leur
+# serie tourne depuis le 02/08 et les couper ne rapporterait rien (3 Ko/run).
+# Les 10 villes historiques gardent leurs COORDONNEES D'ORIGINE : on ne deplace
+# pas le point d'interrogation d'une serie en cours, meme de 400 m.
+#
+# Format : cle -> (lat, lon, tz, unite, libelle tel qu'il apparait dans les
+# questions Polymarket). L'unite est celle du MARCHE, mesuree sur le referentiel :
+# toutes les villes US sont en F, toutes les autres en C, aucune ville mixte.
+# Le libelle est la CLE DE JOINTURE prix <-> prevision : sans lui il faudrait
+# redeviner la ville a partir du texte de la question au moment de l'analyse.
+# Coordonnees des 43 nouvelles villes : geocodees via l'API Open-Meteo, pas
+# tapees de memoire (Panama City -> Panama et non Floride, Seoul (Incheon) ->
+# Incheon KR : deux pieges verifies).
 CITIES = {
-    "nyc":     (40.71,  -74.01, "America/New_York"),
-    "losangeles": (34.05, -118.24, "America/Los_Angeles"),
-    "chicago": (41.88,  -87.63, "America/Chicago"),
-    "miami":   (25.77,  -80.19, "America/New_York"),
-    "phoenix": (33.45, -112.07, "America/Phoenix"),
-    "denver":  (39.74, -104.98, "America/Denver"),
-    "seattle": (47.61, -122.33, "America/Los_Angeles"),
-    "austin":  (30.27,  -97.74, "America/Chicago"),
-    "boston":  (42.36,  -71.06, "America/New_York"),
-    "atlanta": (33.75,  -84.39, "America/New_York"),
+    "nyc":         (  40.710,   -74.010, "America/New_York", "F", "New York City"),
+    "losangeles":  (  34.050,  -118.240, "America/Los_Angeles", "F", "Los Angeles"),
+    "chicago":     (  41.880,   -87.630, "America/Chicago", "F", "Chicago"),
+    "miami":       (  25.770,   -80.190, "America/New_York", "F", "Miami"),
+    "phoenix":     (  33.450,  -112.070, "America/Phoenix", "F", None),
+    "denver":      (  39.740,  -104.980, "America/Denver", "F", "Denver"),
+    "seattle":     (  47.610,  -122.330, "America/Los_Angeles", "F", "Seattle"),
+    "austin":      (  30.270,   -97.740, "America/Chicago", "F", "Austin"),
+    "boston":      (  42.360,   -71.060, "America/New_York", "F", None),
+    "atlanta":     (  33.750,   -84.390, "America/New_York", "F", "Atlanta"),
+    "hongkong":    (  22.278,   114.175, "Asia/Hong_Kong", "C", "Hong Kong"),
+    "london":      (  51.509,    -0.126, "Europe/London", "C", "London"),
+    "munich":      (  48.137,    11.575, "Europe/Berlin", "C", "Munich"),
+    "milan":       (  45.464,     9.190, "Europe/Rome", "C", "Milan"),
+    "amsterdam":   (  52.374,     4.890, "Europe/Amsterdam", "C", "Amsterdam"),
+    "dallas":      (  32.783,   -96.807, "America/Chicago", "F", "Dallas"),
+    "houston":     (  29.763,   -95.363, "America/Chicago", "F", "Houston"),
+    "sanfrancisco":(  37.775,  -122.419, "America/Los_Angeles", "F", "San Francisco"),
+    "mexicocity":  (  19.428,   -99.128, "America/Mexico_City", "C", "Mexico City"),
+    "saopaulo":    ( -23.547,   -46.636, "America/Sao_Paulo", "C", "Sao Paulo"),
+    "buenosaires": ( -34.613,   -58.377, "America/Argentina/Buenos_Aires", "C", "Buenos Aires"),
+    "toronto":     (  43.706,   -79.399, "America/Toronto", "C", "Toronto"),
+    "wellington":  ( -41.287,   174.776, "Pacific/Auckland", "C", "Wellington"),
+    "paris":       (  48.853,     2.349, "Europe/Paris", "C", "Paris"),
+    "ankara":      (  39.920,    32.854, "Europe/Istanbul", "C", "Ankara"),
+    "helsinki":    (  60.170,    24.935, "Europe/Helsinki", "C", "Helsinki"),
+    "madrid":      (  40.416,    -3.703, "Europe/Madrid", "C", "Madrid"),
+    "capetown":    ( -33.926,    18.423, "Africa/Johannesburg", "C", "Cape Town"),
+    "jeddah":      (  21.490,    39.186, "Asia/Riyadh", "C", "Jeddah"),
+    "warsaw":      (  52.230,    21.012, "Europe/Warsaw", "C", "Warsaw"),
+    "telaviv":     (  32.081,    34.781, "Asia/Jerusalem", "C", "Tel Aviv"),
+    "istanbul":    (  41.014,    28.950, "Europe/Istanbul", "C", "Istanbul"),
+    "seoulincheon":(  37.456,   126.705, "Asia/Seoul", "C", "Seoul (Incheon)"),
+    "tokyo":       (  35.690,   139.692, "Asia/Tokyo", "C", "Tokyo"),
+    "shanghai":    (  31.222,   121.458, "Asia/Shanghai", "C", "Shanghai"),
+    "singapore":   (   1.290,   103.850, "Asia/Singapore", "C", "Singapore"),
+    "shenzhen":    (  22.546,   114.068, "Asia/Shanghai", "C", "Shenzhen"),
+    "beijing":     (  39.907,   116.397, "Asia/Shanghai", "C", "Beijing"),
+    "kualalumpur": (   3.141,   101.687, "Asia/Kuala_Lumpur", "C", "Kuala Lumpur"),
+    "guangzhou":   (  23.117,   113.250, "Asia/Shanghai", "C", "Guangzhou"),
+    "chengdu":     (  30.667,   104.067, "Asia/Shanghai", "C", "Chengdu"),
+    "taipei":      (  25.053,   121.526, "Asia/Taipei", "C", "Taipei"),
+    "busan":       (  35.102,   129.030, "Asia/Seoul", "C", "Busan"),
+    "qingdao":     (  36.065,   120.380, "Asia/Shanghai", "C", "Qingdao"),
+    "wuhan":       (  30.583,   114.267, "Asia/Shanghai", "C", "Wuhan"),
+    "karachi":     (  24.861,    67.010, "Asia/Karachi", "C", "Karachi"),
+    "chongqing":   (  29.560,   106.558, "Asia/Shanghai", "C", "Chongqing"),
+    "lucknow":     (  26.839,    80.923, "Asia/Kolkata", "C", "Lucknow"),
+    "manila":      (  14.604,   120.982, "Asia/Manila", "C", "Manila"),
+    "moscow":      (  55.752,    37.618, "Europe/Moscow", "C", "Moscow"),
+    "zhengzhou":   (  34.758,   113.649, "Asia/Shanghai", "C", "Zhengzhou"),
+    "jinan":       (  36.668,   116.997, "Asia/Shanghai", "C", "Jinan"),
+    "panamacity":  (   8.994,   -79.520, "America/Panama", "C", "Panama City"),
 }
 
 
@@ -183,19 +249,125 @@ def collect_markets(closed=False):
                     "end_date": m.get("endDate"),
                     "closed": bool(m.get("closed")),
                     "neg_risk": bool(m.get("negRisk")),
+                    "clob_token_ids": m.get("clobTokenIds") or "",
                     "outcome_prices": json.dumps(prices) if prices else None,
                 })
     return rows
 
 
+def post_json(url, payload, tries=3, timeout=60):
+    last = None
+    for i in range(tries):
+        try:
+            body = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=body, headers={
+                "User-Agent": UA, "Accept": "application/json",
+                "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except Exception as e:
+            last = e
+            time.sleep(2 * (i + 1))
+    print(f"  ! POST echoue apres {tries} essais : {url[:70]} -> {last}", file=sys.stderr)
+    return None
+
+
+# --- PATCH 13/09/2026 : LA PROFONDEUR AU MEILLEUR PRIX -----------------------
+# Mesure du 13/09 sur 27 carnets reels : `liquidityNum` (seule colonne de
+# profondeur collectee jusqu'ici) est la profondeur TOTALE du carnet -- r = +1,00,
+# c'est litteralement le meme nombre. Sur l'EXECUTABLE au meilleur prix, r = +0,15 :
+# aucune information. Carnet total median 17 546 $ pour 12,4 $ au meilleur prix,
+# et "Will 1 Fed rate cut happen in 2026 ?" affiche 308 270 $ de carnet pour
+# 0,80 $ reellement disponibles.
+#   => Le filtre "spread <= 2c ET profondeur >= 100 $" qui a demasque le faux
+#      signal sports du 31/08 portait donc sur le carnet TOTAL : il laissait
+#      passer des marches ou il n'y a rien a executer. Sans ces colonnes,
+#      l'analyse de janvier ne pourra pas faire mieux.
+#
+# Cout mesure le 13/09 : GET /book un par un = 0,263 s/marche -> 43 min pour
+# 9 900 marches (le workflow expire a 25). POST /books groupe = 0,22 s les
+# 50 tokens -> 198 appels, 0,7 min par snapshot. C'est la seule voie tenable.
+BOOKS_BATCH = 50   # MESURE : au-dela, l'API TRONQUE SANS RIEN DIRE
+                   # (100 demandes -> 51 recus, 500 -> 218). Ne pas augmenter
+                   # sans reverifier la completude lot par lot.
+
+
+def collect_depth(rows):
+    """Enrichit chaque ligne avec le carnet au meilleur prix, via POST /books.
+
+    Appariement par `asset_id` et JAMAIS par l'ordre de la reponse : verifie le
+    13/09 (50/50 apparies). Une jointure supposee est l'erreur la plus chere du
+    dossier -- ici elle est testee a chaque run par le compteur d'apparies.
+    """
+    par_token = {}
+    for r in rows:
+        raw = r.get("clob_token_ids") or ""
+        try:
+            toks = json.loads(raw) if isinstance(raw, str) else raw
+        except json.JSONDecodeError:
+            continue
+        if toks:
+            par_token[str(toks[0])] = r      # token YES
+    tokens = list(par_token)
+    if not tokens:
+        print("  profondeur : aucun token -> etape sautee")
+        return 0, 0
+
+    demandes = apparies = 0
+    for i in range(0, len(tokens), BOOKS_BATCH):
+        lot = tokens[i:i + BOOKS_BATCH]
+        rep = post_json(f"{CLOB}/books", [{"token_id": t} for t in lot])
+        demandes += len(lot)
+        if not rep:
+            continue
+        items = rep if isinstance(rep, list) else (rep.get("books") or rep.get("data") or [])
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            r = par_token.get(str(it.get("asset_id") or it.get("token_id") or ""))
+            if r is None:
+                continue          # carnet renvoye pour un token non demande : on ignore
+            apparies += 1
+            bids, asks = it.get("bids") or [], it.get("asks") or []
+            if bids:
+                tb = max(float(x["price"]) for x in bids)
+                sz = sum(float(x["size"]) for x in bids if float(x["price"]) == tb)
+                r["book_bid"], r["bid_size_usd"] = round(tb, 4), round(tb * sz, 2)
+            if asks:
+                ta = min(float(x["price"]) for x in asks)
+                sz = sum(float(x["size"]) for x in asks if float(x["price"]) == ta)
+                r["book_ask"], r["ask_size_usd"] = round(ta, 4), round(ta * sz, 2)
+            if not bids and not asks:
+                r["book_bid"] = r["book_ask"] = ""
+                r["bid_size_usd"] = r["ask_size_usd"] = 0.0
+        time.sleep(0.15)
+
+    pct = round(100.0 * apparies / demandes) if demandes else 0
+    print(f"  profondeur : {apparies}/{demandes} carnets apparies ({pct}%)")
+    if demandes and pct < 60:
+        # Pas une erreur fatale -- le snapshot de prix reste bon -- mais il faut
+        # que ca se VOIE dans les logs le jour ou l'API change de comportement.
+        print(f"  ! appariement faible ({pct}%) : verifier BOOKS_BATCH et /books",
+              file=sys.stderr)
+    return demandes, apparies
+
+
 def collect_forecasts():
-    """Dispersion d'ensemble GFS par ville — le signal 'info externe' jamais teste."""
+    """Dispersion d'ensemble GFS par ville — le signal 'info externe' jamais teste.
+
+    PATCH 13/09/2026 : chaque ville est desormais interrogee dans l'unite de SON
+    marche (F pour les villes US, C pour les autres). Les lignes du fichier ne
+    partagent donc plus la meme unite -> la colonne `unit` devient obligatoire.
+    Sans elle, comparer une prevision a un prix serait une jointure entre deux
+    echelles differentes -- l'erreur type du dossier (19 vs 22 momme, UTC vs Paris).
+    """
     now = datetime.now(timezone.utc)
     rows = []
-    for city, (lat, lon, tz) in CITIES.items():
+    for city, (lat, lon, tz, unite, label) in CITIES.items():
+        u = "fahrenheit" if unite == "F" else "celsius"
         url = (f"{ENSEMBLE}?latitude={lat}&longitude={lon}&models=gfs025"
                f"&daily=temperature_2m_max,temperature_2m_min&forecast_days=7"
-               f"&temperature_unit=fahrenheit&timezone={urllib.parse.quote(tz)}")
+               f"&temperature_unit={u}&timezone={urllib.parse.quote(tz)}")
         d = get_json(url)
         if not d or "daily" not in d:
             continue
@@ -217,6 +389,8 @@ def collect_forecasts():
                 rows.append({
                     "ts": now.isoformat(),
                     "city": city,
+                    "city_label": label or "",   # cle de jointure avec les marches
+                    "unit": unite,               # F ou C — varie d'une ligne a l'autre
                     "variable": var,
                     "target_day": day,
                     "lead_days": i,
@@ -236,10 +410,22 @@ def collect_forecasts():
 # referentiel : un condition_id fait 66 caracteres hex, le repeter a chaque snapshot
 # represente ~70% du poids du fichier.
 SNAP_COLS = ["idx", "best_bid", "best_ask", "spread",
-             "last_trade", "volume", "volume_24h", "liquidity"]
+             "last_trade", "volume", "volume_24h", "liquidity",
+             # PATCH 13/09 : l'EXECUTABLE au meilleur prix. `liquidity` est le
+             # carnet TOTAL et ne dit rien de ce qu'on peut passer maintenant.
+             # book_bid/book_ask sont les prix vus par le CLOB au meme instant :
+             # ils permettent de CONTROLER que la taille va bien avec le prix
+             # (Gamma et le CLOB peuvent diverger de quelques secondes).
+             "book_bid", "book_ask", "bid_size_usd", "ask_size_usd"]
 REF_PATH = "refs/markets_ref.csv"
 REF_COLS = ["idx", "condition_id", "question", "event_tags", "end_date",
-            "neg_risk", "first_seen", "last_seen"]
+            "neg_risk", "first_seen", "last_seen",
+            # PATCH 13/09 : sans les token_ids on ne peut pas re-interroger le
+            # carnet d'un marche apres coup. Ecrit une seule fois par marche
+            # (referentiel), jamais dans les snapshots. Les marches deja resolus
+            # resteront vides : ils ne repasseront plus, et leur carnet n'existe
+            # de toute facon plus.
+            "clob_token_ids"]
 
 
 def update_ref(rows):
@@ -259,13 +445,19 @@ def update_ref(rows):
         cid = r["condition_id"]
         if cid in ref:
             ref[cid]["last_seen"] = now
+            if not ref[cid].get("clob_token_ids"):
+                ref[cid]["clob_token_ids"] = r.get("clob_token_ids", "")
         else:
             max_idx += 1
             ref[cid] = {"idx": max_idx, "condition_id": cid, "question": r["question"],
                         "event_tags": r["event_tags"], "end_date": r["end_date"],
-                        "neg_risk": r["neg_risk"], "first_seen": now, "last_seen": now}
+                        "neg_risk": r["neg_risk"], "first_seen": now, "last_seen": now,
+                        "clob_token_ids": r.get("clob_token_ids", "")}
             added += 1
         r["idx"] = ref[cid]["idx"]
+    if DRY_RUN:
+        print(f"  [dry-run] {REF_PATH} : {len(ref)} marches, +{added} nouveaux, NON ecrit")
+        return
     os.makedirs(os.path.dirname(REF_PATH), exist_ok=True)
     with open(REF_PATH, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=REF_COLS, extrasaction="ignore")
@@ -318,6 +510,9 @@ def save_resolutions(closed_rows):
 
 
 def write_gz(path, rows):
+    if DRY_RUN:
+        print(f"  [dry-run] {path} : {len(rows)} lignes, NON ecrit")
+        return
     if not rows:
         print(f"  (rien a ecrire pour {path})")
         return False
@@ -333,6 +528,10 @@ def write_gz(path, rows):
 
 
 def main():
+    global DRY_RUN
+    DRY_RUN = "--dry-run" in sys.argv
+    if DRY_RUN:
+        print("### MODE SIMULATION : aucun fichier ne sera ecrit ###")
     resolve = "--resolve" in sys.argv
     now = datetime.now(timezone.utc)
     day, stamp = now.strftime("%Y-%m-%d"), now.strftime("%Y%m%dT%H%M")
@@ -345,11 +544,19 @@ def main():
     print("[SNAPSHOT] marches politiques")
     rows = collect_markets(closed=False)
 
+    # PATCH 13/09 : la profondeur au meilleur prix, via POST /books groupe.
+    # Se place APRES collect_markets (qui fournit les token_ids) et AVANT l'ecriture.
+    print("[SNAPSHOT] profondeur des carnets")
+    collect_depth(rows)
+
     # Le libelle d'un marche ne change jamais : on le sort des snapshots vers un
     # referentiel unique en CSV clair (que git delta-compresse tres bien d'un commit
     # a l'autre). Les snapshots ne gardent que ce qui bouge -> ~5x plus leger.
     update_ref(rows)
-    light = [{k: r[k] for k in SNAP_COLS} for r in rows]
+    # .get() et non r[k] : un marche dont le carnet n'a pas ete apparie n'a tout
+    # simplement pas les colonnes de profondeur. Une case vide est une information
+    # honnete ; un KeyError ferait sauter tout le snapshot pour un carnet manquant.
+    light = [{k: r.get(k, "") for k in SNAP_COLS} for r in rows]
     write_gz(f"snaps/{day}/{stamp}_markets.csv.gz", light)
 
     print("[SNAPSHOT] dispersion d'ensemble GFS")

@@ -34,10 +34,12 @@ jobs:
         run: |
           S="${{ inputs.script }}"
           case "$S" in
-            recon*.py) ;;
+            recon*.py) python "$S" ;;
+            # Simulation du patch de collecte : execute tout, n'ecrit rien.
+            # Le garde-fou de l'etape suivante verifie qu'aucun fichier n'a bouge.
+            dry-run) python collect_once.py --dry-run ;;
             *) echo "::error::script refuse : $S"; exit 1 ;;
           esac
-          python "$S"
 
       - name: Verifier qu'aucun fichier n'a ete touche
         run: |
