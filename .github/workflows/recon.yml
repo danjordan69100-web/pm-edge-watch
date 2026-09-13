@@ -6,6 +6,11 @@ name: recon
 # Groupe de concurrence distinct de "collect" pour ne pas bloquer les snapshots.
 on:
   workflow_dispatch:
+    inputs:
+      script:
+        description: "Script de reconnaissance a lancer"
+        required: false
+        default: "recon.py"
 
 concurrency:
   group: recon
@@ -26,7 +31,13 @@ jobs:
           python-version: '3.12'
 
       - name: Reconnaissance (lecture seule)
-        run: python recon.py
+        run: |
+          S="${{ inputs.script }}"
+          case "$S" in
+            recon*.py) ;;
+            *) echo "::error::script refuse : $S"; exit 1 ;;
+          esac
+          python "$S"
 
       - name: Verifier qu'aucun fichier n'a ete touche
         run: |
