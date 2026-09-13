@@ -44,9 +44,41 @@ def get(url, timeout=45, tries=3):
 
 
 def marches_resolus(n=90):
-    """Marches FERMES, tries par date de fin decroissante — on veut des ages varies."""
+    """Marches FERMES. CORRECTIF 14/09 : trier par endDate DESCENDANT ne ramenait que des
+    marches de moins de 3 mois -- l'age est precisement ce qu'on veut tester. On tire donc
+    les DEUX extremites (ascendant = les plus vieux marches de Polymarket) et on y ajoute
+    des condition_id tires de nos propres bases conservees, c'est-a-dire exactement les
+    marches qui etaient dans les 38 Go supprimes."""
     out = []
-    for offset in (0, 100, 200, 400, 800, 1600):
+    for asc in ("true", "false"):
+        for offset in (0, 100, 200, 400, 800):
+            b, err = get("%s/events?closed=true&limit=100&offset=%d&order=endDate&ascending=%s"
+                         % (GAMMA, offset, asc))
+            if not b:
+                print("  ! gamma %s/%d : %s" % (asc, offset, err))
+                continue
+            for ev in b:
+                for m in (ev.get("markets") or []):
+                    cid = m.get("conditionId")
+                    ed = m.get("endDate") or ""
+                    if cid and ed:
+                        out.append((cid, ed, (m.get("question") or "")[:40]))
+    # Nos propres marches perdus
+    try:
+        import os
+        if os.path.exists("cids_anciens.json"):
+            for r in json.load(open("cids_anciens.json")):
+                out.append((r["cid"], r["resolved_at"], "[base locale] " + (r.get("cat") or "")))
+            print("  + %d condition_id tires de nos bases conservees" % len(
+                json.load(open("cids_anciens.json"))))
+    except Exception as e:
+        print("  ! cids_anciens.json : %s" % str(e)[:60])
+    return out
+
+
+def _inutilise(n=0):
+    out = []
+    for offset in (0,):
         b, err = get("%s/events?closed=true&limit=100&offset=%d&order=endDate&ascending=false"
                      % (GAMMA, offset))
         if not b:
@@ -93,7 +125,7 @@ def main():
             continue
         k = ("< 1 mois" if j < 30 else "1-3 mois" if j < 90 else "3-6 mois" if j < 180
              else "6-12 mois" if j < 365 else "> 12 mois")
-        if len(tranches[k]) < 4:
+        if len(tranches[k]) < 5:
             tranches[k].append((cid, j, q))
     for k, v in tranches.items():
         print("  %-10s : %d marches disponibles pour le test" % (k, len(v)))
