@@ -593,13 +593,16 @@ def main():
         save_resolutions(collect_markets(closed=True))
         return
 
+    t0 = time.time()
     print("[SNAPSHOT] marches politiques")
     rows = collect_markets(closed=False)
+    t_mk = time.time() - t0; t0 = time.time()
 
     # PATCH 13/09 : la profondeur au meilleur prix, via POST /books groupe.
     # Se place APRES collect_markets (qui fournit les token_ids) et AVANT l'ecriture.
     print("[SNAPSHOT] profondeur des carnets")
     collect_depth(rows)
+    t_dp = time.time() - t0; t0 = time.time()
 
     # Le libelle d'un marche ne change jamais : on le sort des snapshots vers un
     # referentiel unique en CSV clair (que git delta-compresse tres bien d'un commit
@@ -613,7 +616,12 @@ def main():
 
     print("[SNAPSHOT] dispersion d'ensemble GFS")
     fcasts = collect_forecasts()
+    t_fc = time.time() - t0
     write_gz(f"forecasts/{day}/{stamp}_ensemble.csv.gz", fcasts)
+    # Le budget compte : le workflow expire a 25 min et GitHub saute deja
+    # 2 creneaux sur 7 par jour. Si une etape derive, il faut le voir tout de suite.
+    print(f"[BUDGET] marches {t_mk:.0f}s | profondeur {t_dp:.0f}s | previsions {t_fc:.0f}s"
+          f" | total {t_mk + t_dp + t_fc:.0f}s")
 
     if DRY_RUN:
         controle_dry_run(rows, fcasts)
