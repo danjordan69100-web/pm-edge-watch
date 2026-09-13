@@ -14,7 +14,7 @@ Piste 2 (INFO EXTERNE) : le seul axe jamais mene a terme. On enregistre la DISPE
 Sortie : CSV gzippes commites dans le repo. Aucune infra, aucun cout, PC eteint.
 Usage : python collect_once.py [--resolve]
 """
-import csv, gzip, io, json, os, statistics, sys, time
+import csv, gzip, io, json, os, re, statistics, sys, time
 from datetime import datetime, timezone, timedelta
 import urllib.request, urllib.parse, urllib.error
 
@@ -75,6 +75,46 @@ WITNESS_GRANULARITY = "1H"
 # d'abimer une collecte irremplacable : l'API ne permet pas de rejouer le passe
 # (verifie le 31/08 : /trades plafonne a 50 000, prices-history ~1 mois glissant).
 DRY_RUN = False
+
+# --- PATCH 14/09/2026 : GARDE-FOU D'ESPACEMENT --------------------------------
+# Mesure sur 43 jours : le cron "7 */4 * * *" ne donne PAS 6 snapshots par jour
+# mais 4, et toujours aux memes heures (04, 12, 19, 22 UTC). GitHub ne "saute"
+# pas les creneaux : il les RETARDE de 2 a 4 h sur les repos publics, et les
+# declenchements qui se chevauchent sont absorbes. Resultat : un trou de 8 h la
+# nuit et de 3 h le soir, au lieu d'un pas regulier de 4 h.
+#
+# On ne corrige pas ca en decalant l'heure (le retard est variable, pas fixe) :
+# on multiplie les TENTATIVES et on laisse ce garde-fou imposer la cadence.
+# Une tentative qui arrive trop tot apres le dernier snapshot sort sans rien
+# faire (elle coute un checkout, ~30 s de runner, et rien d'autre).
+MIN_GAP_MINUTES = 210   # 3 h 30 : laisse passer un pas de 4 h meme avance de 30 min
+
+
+def minutes_depuis_dernier_snapshot():
+    """Age du snapshot le plus recent, en minutes. None si aucun.
+    L'horodatage est dans le NOM du fichier (AAAAMMJJTHHMM, UTC) -- decision du
+    02/08, les lignes d'un meme fichier le partagent et ne le repetent pas."""
+    dernier = None
+    for jour in sorted(os.listdir("snaps"), reverse=True)[:3] if os.path.isdir("snaps") else []:
+        d = os.path.join("snaps", jour)
+        if not os.path.isdir(d):
+            continue
+        for f in os.listdir(d):
+            m = re.match(r"(\d{8}T\d{4})_markets\.csv\.gz$", f)
+            if not m:
+                continue
+            try:
+                t = datetime.strptime(m.group(1), "%Y%m%dT%H%M").replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if dernier is None or t > dernier:
+                dernier = t
+        if dernier is not None:
+            break
+    if dernier is None:
+        return None
+    return (datetime.now(timezone.utc) - dernier).total_seconds() / 60.0
+
 
 # --- PATCH 13/09/2026 : les villes -------------------------------------------
 # On collectait la dispersion GFS de 10 villes US alors que les marches meteo
@@ -633,6 +673,17 @@ def main():
     if DRY_RUN:
         print("### MODE SIMULATION : aucun fichier ne sera ecrit ###")
     resolve = "--resolve" in sys.argv
+
+    # --gap-guard n'est passe QUE par les runs planifies : un declenchement
+    # manuel doit toujours produire un snapshot.
+    if "--gap-guard" in sys.argv and not resolve:
+        age = minutes_depuis_dernier_snapshot()
+        if age is not None and age < MIN_GAP_MINUTES:
+            print(f"[SKIP] dernier snapshot il y a {age:.0f} min "
+                  f"(< {MIN_GAP_MINUTES}) — tentative de rattrapage, rien a faire")
+            return
+        if age is not None:
+            print(f"[GO] dernier snapshot il y a {age:.0f} min")
     now = datetime.now(timezone.utc)
     day, stamp = now.strftime("%Y-%m-%d"), now.strftime("%Y%m%dT%H%M")
 

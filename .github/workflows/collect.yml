@@ -2,7 +2,13 @@ name: pm-edge-watch
 
 on:
   schedule:
-    - cron: '7 */4 * * *'    # snapshot marches + ensemble GFS, toutes les 4h
+    # PATCH 14/09/2026 : tentative toutes les 2 h, PAS un snapshot toutes les 2 h.
+    # Mesure sur 43 jours : '7 */4 * * *' ne rendait que 4 snapshots/jour, toujours
+    # aux memes heures (04, 12, 19, 22 UTC) -- GitHub retarde les schedules de 2 a 4 h
+    # sur les repos publics et absorbe ceux qui se chevauchent. En doublant les
+    # tentatives, le garde-fou MIN_GAP_MINUTES (210) du script impose lui-meme un pas
+    # regulier de ~4 h : une tentative trop rapprochee sort sans rien ecrire.
+    - cron: '7 */2 * * *'    # tentative de snapshot, garde-fou cote script
     - cron: '40 3 * * *'     # balayage des resolutions, 1x/jour
   workflow_dispatch:
 
@@ -29,7 +35,11 @@ jobs:
         run: |
           if [ "${{ github.event.schedule }}" = "40 3 * * *" ]; then
             python collect_once.py --resolve
+          elif [ -n "${{ github.event.schedule }}" ]; then
+            # Run planifie : soumis au garde-fou d'espacement.
+            python collect_once.py --gap-guard
           else
+            # Declenchement manuel : toujours un snapshot, sans garde-fou.
             python collect_once.py
           fi
 
