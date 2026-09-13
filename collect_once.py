@@ -527,6 +527,58 @@ def write_gz(path, rows):
     return True
 
 
+def controle_dry_run(rows, fcasts):
+    """Controle de CONTENU, pas de reussite d'appel.
+
+    "9 559 carnets apparies" dit qu'on a retrouve les carnets, pas que les colonnes
+    sont remplies ni que la jointure ville tient. Le dossier a paye assez cher les
+    jointures supposees (protocole du 20/08) : on les teste ici, a chaque simulation.
+    """
+    print("")
+    print("=== CONTROLE DU PATCH ===")
+    n = len(rows)
+    for c in ("book_bid", "book_ask", "bid_size_usd", "ask_size_usd", "clob_token_ids"):
+        plein = sum(1 for r in rows if r.get(c) not in (None, ""))
+        print(f"  {c:16s} rempli sur {plein:5d}/{n} ({100*plein//max(n,1)}%)")
+
+    # 1. La taille va-t-elle avec le prix ? book_bid (CLOB) doit coller a best_bid
+    #    (Gamma). Si les deux divergent, la taille decrit un autre instant que le prix.
+    ecarts = [abs(float(r["book_bid"]) - float(r["best_bid"]))
+              for r in rows
+              if r.get("book_bid") not in (None, "") and r.get("best_bid") is not None]
+    if ecarts:
+        ecarts.sort()
+        gros = sum(1 for e in ecarts if e > 0.02)
+        print(f"  |book_bid - best_bid| : median {ecarts[len(ecarts)//2]:.4f}"
+              f" | p95 {ecarts[int(0.95*len(ecarts))]:.4f}"
+              f" | > 2c : {gros} ({100*gros//len(ecarts)}%)")
+
+    # 2. Ce qui motive tout le patch : l'executable est-il vraiment petit ?
+    tops = sorted(float(r["bid_size_usd"]) for r in rows
+                  if r.get("bid_size_usd") not in (None, ""))
+    liqs = sorted(float(r["liquidity"]) for r in rows if r.get("liquidity") is not None)
+    if tops and liqs:
+        print(f"  executable au meilleur bid : median {tops[len(tops)//2]:.1f} $"
+              f" | >= 100 $ : {100*sum(1 for t in tops if t >= 100)//len(tops)}%")
+        print(f"  liquidity (carnet total)   : median {liqs[len(liqs)//2]:.0f} $"
+              f" | >= 100 $ : {100*sum(1 for l in liqs if l >= 100)//len(liqs)}%")
+        print("  (l'ecart entre ces deux lignes EST la raison du patch)")
+
+    # 3. JOINTURE ville : chaque libelle de prevision retrouve-t-il des marches ?
+    labels = {v[4] for v in CITIES.values() if v[4]}
+    vus = {f.get("city_label") for f in fcasts if f.get("city_label")}
+    print(f"  villes prevues avec libelle : {len(labels)} | presentes dans les previsions : {len(vus)}")
+    qs = [r.get("question", "") for r in rows]
+    sans = [l for l in labels if not any((" in " + l + " be ") in q for q in qs)]
+    print(f"  libelles SANS aucun marche en face ce run : {len(sans)}"
+          + (f" -> {sorted(sans)[:6]}" if sans else ""))
+    unites = {}
+    for f in fcasts:
+        unites[f.get("unit")] = unites.get(f.get("unit"), 0) + 1
+    print(f"  previsions par unite : {unites}")
+
+
+
 def main():
     global DRY_RUN
     DRY_RUN = "--dry-run" in sys.argv
@@ -560,7 +612,11 @@ def main():
     write_gz(f"snaps/{day}/{stamp}_markets.csv.gz", light)
 
     print("[SNAPSHOT] dispersion d'ensemble GFS")
-    write_gz(f"forecasts/{day}/{stamp}_ensemble.csv.gz", collect_forecasts())
+    fcasts = collect_forecasts()
+    write_gz(f"forecasts/{day}/{stamp}_ensemble.csv.gz", fcasts)
+
+    if DRY_RUN:
+        controle_dry_run(rows, fcasts)
 
 
 if __name__ == "__main__":
