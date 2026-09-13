@@ -1,0 +1,38 @@
+name: recon
+
+# RECONNAISSANCE SEULE, declenchement MANUEL uniquement.
+# Aucun cron : ce workflow ne doit jamais tourner tout seul.
+# Il n'ecrit aucun fichier et ne commit rien -> il ne peut pas abimer la collecte.
+# Groupe de concurrence distinct de "collect" pour ne pas bloquer les snapshots.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: recon
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Reconnaissance (lecture seule)
+        run: python recon.py
+
+      - name: Verifier qu'aucun fichier n'a ete touche
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::recon.py a modifie des fichiers — il ne devrait jamais"
+            git status --porcelain
+            exit 1
+          fi
+          echo "OK : aucun fichier modifie"
